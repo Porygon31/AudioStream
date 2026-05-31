@@ -17,6 +17,8 @@ URL LAN:    http://192.168.1.33:5100
 
 Ouvre l'URL LAN depuis un telephone, une tablette ou un autre ordinateur connecte au meme reseau local, puis clique sur `Demarrer l'ecoute`.
 
+Au demarrage, AudioStream affiche une banniere coloree et verifie si le port TCP choisi est autorise dans le pare-feu Windows. Si le port n'est pas autorise, la console propose de creer automatiquement la regle entrante.
+
 ## Options
 
 ```powershell

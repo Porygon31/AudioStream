@@ -53,15 +53,57 @@ public static class AudioStreamApp
     /// </summary>
     public static void PrintStartupUrls(AudioStreamOptions options)
     {
-        Console.WriteLine("AudioStream demarre.");
-        Console.WriteLine($"URL locale: http://localhost:{options.Port}");
+        ConsoleDisplay.WriteLine("AudioStream demarre.", ConsoleColor.Green);
+        ConsoleDisplay.WriteLine($"URL locale: http://localhost:{options.Port}", ConsoleColor.Cyan);
 
         foreach (var address in GetLanAddresses())
         {
-            Console.WriteLine($"URL LAN:    http://{address}:{options.Port}");
+            ConsoleDisplay.WriteLine($"URL LAN:    http://{address}:{options.Port}", ConsoleColor.Cyan);
         }
 
-        Console.WriteLine("Si un autre appareil ne peut pas se connecter, verifiez le pare-feu Windows.");
+        ConsoleDisplay.WriteLine("Si un autre appareil ne peut pas se connecter, verifiez le pare-feu Windows.", ConsoleColor.Yellow);
+    }
+
+    /// <summary>
+    /// Verifie que le pare-feu Windows autorise le port et propose de l'ouvrir si besoin.
+    /// </summary>
+    public static void EnsureFirewallPortAllowed(int port, IWindowsFirewallPortService firewallPortService, bool skipPrompt)
+    {
+        if (skipPrompt)
+        {
+            return;
+        }
+
+        if (!firewallPortService.IsSupported)
+        {
+            ConsoleDisplay.WriteLine("Verification du pare-feu ignoree: systeme non Windows.", ConsoleColor.Yellow);
+            return;
+        }
+
+        if (firewallPortService.IsPortAllowed(port))
+        {
+            ConsoleDisplay.WriteLine($"Pare-feu Windows: le port TCP {port} est deja autorise.", ConsoleColor.Green);
+            return;
+        }
+
+        var shouldOpenPort = ConsoleDisplay.AskYesNo($"Le port {port} n'est pas autorise dans le pare-feu Windows. Voulez-vous l'ouvrir ? (o/N)");
+
+        if (!shouldOpenPort)
+        {
+            ConsoleDisplay.WriteLine("Port non ouvert automatiquement. Les appareils du LAN peuvent etre bloques.", ConsoleColor.Yellow);
+            return;
+        }
+
+        var result = firewallPortService.OpenPort(port);
+
+        if (result.Succeeded)
+        {
+            ConsoleDisplay.WriteLine($"Pare-feu Windows: le port TCP {port} a ete autorise.", ConsoleColor.Green);
+            return;
+        }
+
+        ConsoleDisplay.WriteLine("Impossible d'ouvrir le port automatiquement. Lancez la commande suivante en administrateur:", ConsoleColor.Red);
+        ConsoleDisplay.WriteLine(firewallPortService.BuildOpenPortCommand(port), ConsoleColor.Yellow);
     }
 
     /// <summary>
