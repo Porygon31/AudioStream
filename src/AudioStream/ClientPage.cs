@@ -91,7 +91,7 @@ public static class ClientPage
     <script>
         // Le serveur envoie des echantillons float32 stereo interleaves a cette frequence.
         const STREAM_SAMPLE_RATE = {{sampleRate}};
-        const startButton = document.querySelector("#start");
+        const controlButton = document.querySelector("#start");
         const statusElement = document.querySelector("#status");
 
         let audioContext;
@@ -99,9 +99,44 @@ public static class ClientPage
         let scriptNode;
         let audioSink;
         let socket;
+        let playerState = "idle";
+        let intentionallyClosedSocket = null;
 
         function setStatus(message) {
             statusElement.textContent = message;
+        }
+
+        function setPlayerState(nextState) {
+            playerState = nextState;
+            controlButton.disabled = nextState === "connecting";
+
+            if (nextState === "idle") {
+                controlButton.textContent = "Demarrer l'ecoute";
+                return;
+            }
+
+            if (nextState === "paused") {
+                controlButton.textContent = "Reprendre";
+                return;
+            }
+
+            controlButton.textContent = "Pause";
+        }
+
+        function setPlayingState() {
+            setPlayerState("playing");
+            setStatus("Connecte. Lecture en cours.");
+        }
+
+        function setPausedState() {
+            setPlayerState("paused");
+            setStatus("Lecture en pause.");
+        }
+
+        function resetPlayer() {
+            socket = null;
+            audioSink?.clear();
+            setPlayerState("idle");
         }
 
         function readStereoSample(queueState, left, right, index) {
@@ -137,7 +172,15 @@ public static class ClientPage
                         super();
                         this.queue = [];
                         this.offset = 0;
-                        this.port.onmessage = (event) => this.queue.push(event.data);
+                        this.port.onmessage = (event) => {
+                            if (event.data?.type === "clear") {
+                                this.queue = [];
+                                this.offset = 0;
+                                return;
+                            }
+
+                            this.queue.push(event.data);
+                        };
                     }
 
                     process(inputs, outputs) {
@@ -186,6 +229,9 @@ public static class ClientPage
                 postPacket(packet, transferableBuffer) {
                     // Le transfert evite une copie inutile entre le thread reseau et l'AudioWorklet.
                     workletNode.port.postMessage(packet, [transferableBuffer]);
+                },
+                clear() {
+                    workletNode.port.postMessage({ type: "clear" });
                 }
             };
         }
@@ -208,46 +254,107 @@ public static class ClientPage
             audioSink = {
                 postPacket(packet) {
                     queueState.queue.push(packet);
+                },
+                clear() {
+                    queueState.queue.length = 0;
+                    queueState.offset = 0;
                 }
             };
         }
 
-        async function start() {
-            startButton.disabled = true;
-            setStatus("Initialisation audio...");
+        async function ensureAudioNode() {
+            if (audioContext) {
+                return;
+            }
+
+            await createAudioNode();
+        }
+
+        async function connectStream() {
+            setPlayerState("connecting");
+            setStatus("Connexion au flux audio...");
 
             try {
-                await createAudioNode();
+                await ensureAudioNode();
+                await audioContext.resume();
+                audioSink?.clear();
 
                 const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-                socket = new WebSocket(`${protocol}//${location.host}/audio`);
-                socket.binaryType = "arraybuffer";
+                const nextSocket = new WebSocket(`${protocol}//${location.host}/audio`);
+                socket = nextSocket;
+                nextSocket.binaryType = "arraybuffer";
 
-                socket.onopen = async () => {
-                    await audioContext.resume();
-                    setStatus("Connecte. Lecture en cours.");
+                nextSocket.onopen = async () => {
+                    if (socket !== nextSocket) {
+                        return;
+                    }
+
+                    setPlayingState();
                 };
 
-                socket.onmessage = (event) => {
+                nextSocket.onmessage = (event) => {
+                    if (playerState !== "playing") {
+                        return;
+                    }
+
                     audioSink.postPacket(new Float32Array(event.data), event.data);
                 };
 
-                socket.onclose = () => {
+                nextSocket.onclose = () => {
+                    if (nextSocket === intentionallyClosedSocket) {
+                        intentionallyClosedSocket = null;
+                        return;
+                    }
+
+                    if (socket !== nextSocket) {
+                        return;
+                    }
+
                     setStatus("Connexion fermee.");
-                    startButton.disabled = false;
+                    resetPlayer();
                 };
 
-                socket.onerror = () => {
+                nextSocket.onerror = () => {
+                    if (nextSocket === intentionallyClosedSocket || socket !== nextSocket) {
+                        return;
+                    }
+
                     setStatus("Erreur de connexion au flux audio.");
-                    startButton.disabled = false;
+                    resetPlayer();
                 };
             } catch (error) {
                 setStatus(`Erreur: ${error.message}`);
-                startButton.disabled = false;
+                resetPlayer();
             }
         }
 
-        startButton.addEventListener("click", start);
+        function pauseStream() {
+            audioSink?.clear();
+
+            if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+                intentionallyClosedSocket = socket;
+                socket.close(1000, "Pause");
+            }
+
+            socket = null;
+            setPausedState();
+        }
+
+        async function togglePlayback() {
+            try {
+                if (playerState === "idle" || playerState === "paused") {
+                    await connectStream();
+                    return;
+                }
+
+                pauseStream();
+            } catch (error) {
+                setStatus(`Erreur: ${error.message}`);
+                controlButton.disabled = false;
+            }
+        }
+
+        controlButton.addEventListener("click", togglePlayback);
     </script>
 </body>
 </html>

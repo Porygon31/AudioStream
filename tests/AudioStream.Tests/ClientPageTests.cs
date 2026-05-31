@@ -18,6 +18,27 @@ public sealed class ClientPageTests
     }
 
     [Fact]
+    public void Render_IncludesPauseAndResumeControls()
+    {
+        var html = ClientPage.Render(48000);
+
+        Assert.Contains("Pause", html);
+        Assert.Contains("Reprendre", html);
+        Assert.Contains("audioContext.resume()", html);
+    }
+
+    [Fact]
+    public void Render_StopsStreamAndClearsBuffersWhenPaused()
+    {
+        var html = ClientPage.Render(48000);
+
+        Assert.DoesNotContain("audioContext.suspend()", html);
+        Assert.Contains("socket.close(1000, \"Pause\")", html);
+        Assert.Contains("type: \"clear\"", html);
+        Assert.Contains("queueState.queue.length = 0", html);
+    }
+
+    [Fact]
     public void Render_InjectsConfiguredSampleRate()
     {
         var html = ClientPage.Render(44100);
