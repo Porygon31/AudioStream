@@ -1,0 +1,10 @@
+# Sorties de compilation .NET.
+bin/
+obj/
+
+# Fichiers temporaires des editeurs.
+.vs/
+.vscode/
+
+# Journaux locaux de verification.
+*.log
