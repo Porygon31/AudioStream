@@ -115,7 +115,8 @@ public static class AudioStreamApp
         var broadcaster = context.RequestServices.GetRequiredService<AudioBroadcaster>();
         using var socket = await context.WebSockets.AcceptWebSocketAsync();
         var client = new WebSocketAudioClient(socket);
-        var clientId = broadcaster.AddClient(client);
+        var remoteEndpoint = FormatRemoteEndpoint(context.Connection.RemoteIpAddress, context.Connection.RemotePort);
+        var clientId = broadcaster.AddClient(client, remoteEndpoint);
 
         try
         {
@@ -135,5 +136,34 @@ public static class AudioStreamApp
         return host.AddressList
             .Where(address => address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
             .Where(address => !IPAddress.IsLoopback(address));
+    }
+
+    /// <summary>
+    /// Formate l'adresse reseau distante pour les logs de connexion client.
+    /// </summary>
+    public static string FormatRemoteEndpoint(IPAddress? remoteIpAddress, int remotePort)
+    {
+        if (remoteIpAddress is null)
+        {
+            return "IP inconnue";
+        }
+
+        // Les connexions locales peuvent arriver sous forme IPv6 mappee; l'IPv4 est plus lisible.
+        if (remoteIpAddress.IsIPv4MappedToIPv6)
+        {
+            remoteIpAddress = remoteIpAddress.MapToIPv4();
+        }
+
+        if (remotePort <= 0)
+        {
+            return remoteIpAddress.ToString();
+        }
+
+        if (remoteIpAddress.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
+        {
+            return $"[{remoteIpAddress}]:{remotePort}";
+        }
+
+        return $"{remoteIpAddress}:{remotePort}";
     }
 }

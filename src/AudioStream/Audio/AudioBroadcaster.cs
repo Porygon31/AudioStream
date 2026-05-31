@@ -7,7 +7,7 @@ namespace AudioStream.Audio;
 /// </summary>
 public sealed class AudioBroadcaster
 {
-    private readonly ConcurrentDictionary<Guid, IAudioClient> clients = new();
+    private readonly ConcurrentDictionary<Guid, ConnectedAudioClient> clients = new();
     private readonly ILogger<AudioBroadcaster> logger;
 
     /// <summary>
@@ -26,11 +26,11 @@ public sealed class AudioBroadcaster
     /// <summary>
     /// Ajoute un client et retourne son identifiant interne.
     /// </summary>
-    public Guid AddClient(IAudioClient client)
+    public Guid AddClient(IAudioClient client, string remoteEndpoint)
     {
         var id = Guid.NewGuid();
-        clients[id] = client;
-        logger.LogInformation("Client audio connecte: {ClientId}", id);
+        clients[id] = new ConnectedAudioClient(client, remoteEndpoint);
+        logger.LogInformation("Client audio connecte depuis {RemoteEndpoint}", remoteEndpoint);
         return id;
     }
 
@@ -39,9 +39,9 @@ public sealed class AudioBroadcaster
     /// </summary>
     public void RemoveClient(Guid clientId)
     {
-        if (clients.TryRemove(clientId, out _))
+        if (clients.TryRemove(clientId, out var connectedClient))
         {
-            logger.LogInformation("Client audio deconnecte: {ClientId}", clientId);
+            logger.LogInformation("Client audio deconnecte depuis {RemoteEndpoint}", connectedClient.RemoteEndpoint);
         }
     }
 
@@ -50,8 +50,10 @@ public sealed class AudioBroadcaster
     /// </summary>
     public async ValueTask BroadcastAsync(ReadOnlyMemory<byte> frame, CancellationToken cancellationToken)
     {
-        foreach (var (clientId, client) in clients.ToArray())
+        foreach (var (clientId, connectedClient) in clients.ToArray())
         {
+            var client = connectedClient.Client;
+
             if (!client.IsOpen)
             {
                 RemoveClient(clientId);
@@ -64,9 +66,11 @@ public sealed class AudioBroadcaster
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                logger.LogWarning(exception, "Client audio retire apres une erreur d'envoi: {ClientId}", clientId);
+                logger.LogWarning(exception, "Client audio retire apres une erreur d'envoi depuis {RemoteEndpoint}", connectedClient.RemoteEndpoint);
                 RemoveClient(clientId);
             }
         }
     }
+
+    private sealed record ConnectedAudioClient(IAudioClient Client, string RemoteEndpoint);
 }
