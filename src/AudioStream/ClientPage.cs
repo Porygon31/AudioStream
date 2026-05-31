@@ -96,13 +96,40 @@ public static class ClientPage
 
         let audioContext;
         let workletNode;
+        let scriptNode;
+        let audioSink;
         let socket;
 
         function setStatus(message) {
             statusElement.textContent = message;
         }
 
+        function readStereoSample(queueState, left, right, index) {
+            if (queueState.queue.length === 0) {
+                left[index] = 0;
+                right[index] = 0;
+                return;
+            }
+
+            const packet = queueState.queue[0];
+            left[index] = packet[queueState.offset] || 0;
+            right[index] = packet[queueState.offset + 1] || 0;
+            queueState.offset += 2;
+
+            if (queueState.offset >= packet.length) {
+                queueState.queue.shift();
+                queueState.offset = 0;
+            }
+        }
+
         async function createAudioNode() {
+            audioContext = new AudioContext({ sampleRate: STREAM_SAMPLE_RATE });
+
+            if (!audioContext.audioWorklet || typeof AudioWorkletNode === "undefined") {
+                createScriptProcessorFallback();
+                return;
+            }
+
             // L'AudioWorklet garde une file de petits paquets PCM recus par WebSocket.
             const processorSource = `
                 class PcmPlayerProcessor extends AudioWorkletProcessor {
@@ -143,15 +170,46 @@ public static class ClientPage
             `;
 
             const processorUrl = URL.createObjectURL(new Blob([processorSource], { type: "text/javascript" }));
-            audioContext = new AudioContext({ sampleRate: STREAM_SAMPLE_RATE });
-            await audioContext.audioWorklet.addModule(processorUrl);
-            URL.revokeObjectURL(processorUrl);
+            try {
+                await audioContext.audioWorklet.addModule(processorUrl);
+            } finally {
+                URL.revokeObjectURL(processorUrl);
+            }
 
             workletNode = new AudioWorkletNode(audioContext, "pcm-player", {
                 numberOfOutputs: 1,
                 outputChannelCount: [2]
             });
             workletNode.connect(audioContext.destination);
+
+            audioSink = {
+                postPacket(packet, transferableBuffer) {
+                    // Le transfert evite une copie inutile entre le thread reseau et l'AudioWorklet.
+                    workletNode.port.postMessage(packet, [transferableBuffer]);
+                }
+            };
+        }
+
+        function createScriptProcessorFallback() {
+            // Fallback utile sur HTTP LAN, ou AudioWorklet n'est pas toujours disponible.
+            const queueState = { queue: [], offset: 0 };
+            scriptNode = audioContext.createScriptProcessor(4096, 0, 2);
+
+            scriptNode.onaudioprocess = (event) => {
+                const left = event.outputBuffer.getChannelData(0);
+                const right = event.outputBuffer.getChannelData(1);
+
+                for (let index = 0; index < left.length; index++) {
+                    readStereoSample(queueState, left, right, index);
+                }
+            };
+
+            scriptNode.connect(audioContext.destination);
+            audioSink = {
+                postPacket(packet) {
+                    queueState.queue.push(packet);
+                }
+            };
         }
 
         async function start() {
@@ -171,8 +229,7 @@ public static class ClientPage
                 };
 
                 socket.onmessage = (event) => {
-                    // Le transfert evite une copie inutile entre le thread reseau et l'AudioWorklet.
-                    workletNode.port.postMessage(new Float32Array(event.data), [event.data]);
+                    audioSink.postPacket(new Float32Array(event.data), event.data);
                 };
 
                 socket.onclose = () => {
